@@ -130,30 +130,56 @@ class SAM3Pipeline:
         points: np.ndarray,
         labels: np.ndarray,
     ) -> tuple[None, list[int], None, np.ndarray]:
-        """stub: 用背景减除 + 形态学生成 mask. 第一个 positive 点作为种子。"""
+        """stub: 用背景减除 + 颜色相似度做多提示点 flood fill。
+
+        忠实复现 app.py:on_click 的累积语义:
+        - points 可能是归一化 [0,1] (来自 on_click 归一化) 或绝对像素
+        - 多个正向点都作为种子, 对每个种子独立 flood fill 后取并集
+        - 多个负向点都作为"挖洞"点
+        - 形态学后处理 (闭 + 开)
+        """
         H, W = state["video_height"], state["video_width"]
         if not state.get("frames"):
             self._load_all_frames(state)
         frame = state["frames"][frame_idx]
         bg_mask = state["bg_subtractor"].apply(frame)
 
-        # 找 positive 种子点
-        seeds_pos = [(int(p[0]), int(p[1])) for p, l in zip(points, labels) if l == 1]
-        seeds_neg = [(int(p[0]), int(p[1])) for p, l in zip(points, labels) if l == 0]
-
-        if seeds_pos:
-            seed = seeds_pos[0]
-            mask = self._flood_grow(frame, bg_mask, seed, seeds_neg)
+        # 1) 解析 points: 支持 [0,1] 归一化和绝对像素两种
+        pts_arr = np.asarray(points)
+        lbs_arr = np.asarray(labels, dtype=np.int32)
+        if pts_arr.size > 0 and float(pts_arr.max()) <= 1.5:
+            # 归一化坐标 → 像素
+            pts_arr = (pts_arr.astype(np.float32) * np.array([W, H], dtype=np.float32)).astype(np.int32)
         else:
-            mask = np.zeros((H, W), dtype=np.uint8)
+            # 已经是像素坐标 → 强制 int32 (下游 _flood_grow 用作 numpy 索引)
+            pts_arr = pts_arr.astype(np.int32)
 
-        # 形态学后处理
+        seeds_pos = [(int(p[0]), int(p[1])) for p, l in zip(pts_arr, lbs_arr) if int(l) == 1]
+        seeds_neg = [(int(p[0]), int(p[1])) for p, l in zip(pts_arr, lbs_arr) if int(l) == 0]
+
+        # 2) 多正向点: 每个种子独立 flood fill, 取并集
+        mask = np.zeros((H, W), dtype=np.uint8)
+        for seed in seeds_pos:
+            if not (0 <= seed[0] < W and 0 <= seed[1] < H):
+                continue
+            sub = self._flood_grow(frame, bg_mask, seed, [])
+            mask = cv2.bitwise_or(mask, sub)
+
+        # 3) 负向点: 挖洞 (排除区域)
+        for nx, ny in seeds_neg:
+            if 0 <= nx < W and 0 <= ny < H:
+                cv2.circle(mask, (nx, ny), 30, 0, -1)
+
+        # 4) 形态学后处理
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
 
-        # 存 obj -> points
-        state["points"].setdefault(obj_id, []).append((frame_idx, seeds_pos + seeds_neg))
+        # 5) 存 obj -> prompts 历史 (供 propagate 使用)
+        state["points"].setdefault(obj_id, {})[frame_idx] = (
+            [tuple(p) for p in pts_arr.tolist()],
+            [int(l) for l in lbs_arr.tolist()],
+        )
 
         return None, [obj_id], None, mask[None, None, :, :].astype(np.float32)
 
@@ -164,28 +190,46 @@ class SAM3Pipeline:
         max_frames: int,
         reverse: bool,
     ):
-        """stub: 简单向前/向后传播 mask 跟踪 bg。"""
+        """stub: 简单向前/向后传播 mask 跟踪 bg。
+
+        与 on_click 的新结构对齐: state["points"][obj_id][frame_idx] = (pts, lbs)
+        """
         if not state.get("frames"):
             self._load_all_frames(state)
 
         H, W = state["video_height"], state["video_width"]
         total = min(state["total_frames"], start_frame_idx + max_frames)
-        # 用前向
         prev_mask = None
         obj_id = next(iter(state["points"].keys()), 1)
+        # 找出该 obj 的首个有 prompts 的 frame (作为种子)
+        first_prompt_frame = None
+        if obj_id in state["points"]:
+            for fi in sorted(state["points"][obj_id].keys()):
+                if state["points"][obj_id][fi]:
+                    first_prompt_frame = fi
+                    break
+
         for idx in range(start_frame_idx, total):
             frame = state["frames"][idx]
             bg_mask = state["bg_subtractor"].apply(frame)
 
-            if idx == start_frame_idx and obj_id in state["points"]:
-                # 第一次：从点击点 flood
-                pts = state["points"][obj_id][0][1]  # (frame, [(x,y) positive])
-                if pts:
-                    mask = self._flood_grow(frame, bg_mask, pts[0], [])
-                else:
-                    mask = np.zeros((H, W), dtype=np.uint8)
+            if idx == start_frame_idx and first_prompt_frame is not None and obj_id in state["points"]:
+                # 第一次: 从首个有 prompts 的 frame 拿到所有正向点, flood fill
+                pts_lbs = state["points"][obj_id][first_prompt_frame]
+                pts, lbs = pts_lbs
+                pos_seeds = [p for p, l in zip(pts, lbs) if int(l) == 1]
+                neg_seeds = [p for p, l in zip(pts, lbs) if int(l) == 0]
+                mask = np.zeros((H, W), dtype=np.uint8)
+                for seed in pos_seeds:
+                    if not (0 <= seed[0] < W and 0 <= seed[1] < H):
+                        continue
+                    sub = self._flood_grow(frame, bg_mask, tuple(seed), [])
+                    mask = cv2.bitwise_or(mask, sub)
+                for nx, ny in neg_seeds:
+                    if 0 <= nx < W and 0 <= ny < H:
+                        cv2.circle(mask, (nx, ny), 30, 0, -1)
             else:
-                # 跟踪：用 prev_mask + 帧间相关性
+                # 跟踪: 用 prev_mask + 帧间相关性
                 mask = self._track_mask(frame, bg_mask, prev_mask)
 
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))

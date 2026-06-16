@@ -94,24 +94,50 @@ def test_full_pipeline_e2e(reset_state):
     clip = r.json()["clip"]
     clip_id = clip["id"]
 
-    # 4. 标注
+    # 4. 标注 (新流程: 忠实复现 app.py on_click + add_target)
+    # 4a. clickTarget: 实时 mask 预览 (不持久化, 不改 status)
     r = client.post("/api/target/click", json={
         "clip_id": clip_id,
         "obj_id": 1,
         "frame_idx": 0,
         "x": 160, "y": 120,
         "point_type": "positive",
+        "frame_width": 320, "frame_height": 240,
+        "points": [{"x": 160, "y": 120, "point_type": "positive"}],
     })
     assert r.status_code == 200, r.text
+    assert r.json()["point_count"] == 1
 
+    # 4b. clickTarget 第 2 次: 累积多点击 (新式 points 字段)
     r = client.post("/api/target/click", json={
         "clip_id": clip_id,
         "obj_id": 1,
         "frame_idx": 5,
         "x": 200, "y": 130,
         "point_type": "negative",
+        "frame_width": 320, "frame_height": 240,
+        "points": [{"x": 200, "y": 130, "point_type": "negative"}],
     })
     assert r.status_code == 200, r.text
+    assert r.json()["point_count"] == 1
+
+    # 4c. annotateClip: 持久化全量标注 (前端是 source of truth)
+    r = client.post(f"/api/clips/{clip_id}/annotate", json={
+        "annotations": [
+            {"obj_id": 1, "frame_idx": 0, "x": 160, "y": 120, "point_type": "positive"},
+            {"obj_id": 1, "frame_idx": 5, "x": 200, "y": 130, "point_type": "negative"},
+        ]
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["annotation_count"] == 2
+    # 注: 状态不变 (仍是 FINE_CUT), 因为还没有 add_target
+    assert r.json()["status"] == "fine_cut"
+
+    # 4d. add_target: 提交事务边界, 推进 status FINE_CUT → ANNOTATED
+    r = client.post("/api/target/add", json={"clip_id": clip_id})
+    assert r.status_code == 200, r.text
+    assert r.json()["clip_status"] == "annotated"
+    assert r.json()["obj_id"] == 2  # 下一个 obj_id (1 已被占用)
 
     # 5. 4D 重建
     r = client.post("/api/4d/reconstruct", json={"clip_id": clip_id})

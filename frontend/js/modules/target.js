@@ -397,11 +397,26 @@ const Target = {
     this.renderClipSummary();
     // 更新候选帧角标
     this.refreshFrameBadge(frame_idx);
-    // 持久化
+    // 持久化 (annotateClip) + 实时 mask 预览 (clickTarget)
     try {
       await Utils.safe(() => API.annotateClip(this._clip.id, {
         annotations: this._annotations,
       }), '保存标注失败');
+      // ★ 忠实复现: 调 clickTarget, 把当前 frame 当前 obj 的所有点 + 帧宽高送过去
+      //  (后端会做归一化, 跟 app.py:421-422 一致)
+      const currentFramePts = this._annotations
+        .filter(a => a.frame_idx === frame_idx && a.obj_id === obj_id)
+        .map(a => ({ x: a.x, y: a.y, point_type: a.point_type }));
+      API.clickTarget({
+        clip_id: this._clip.id,
+        obj_id,
+        frame_idx,
+        x, y, point_type: pt,           // 旧式字段 (向后兼容)
+        points: currentFramePts,         // 新式字段 (推荐: 累积多点击)
+        frame_width: iw,
+        frame_height: ih,
+        frame_base64: this._frames[frame_idx],
+      }).catch(err => console.warn('clickTarget preview failed:', err));
       Utils.toast(`✓ 已标注 obj #${obj_id} (${pt}) at (${x}, ${y})`, 'success', 1200);
     } catch (err) {
       // 回滚
@@ -537,11 +552,19 @@ const Target = {
       Utils.toast(`当前 obj #${currentObj} 没有任何标注，请在画布上点击添加`, 'error');
       return;
     }
-    // 推一个新的 obj_id，给下一个 target 用
-    this._nextObjId += 1;
-    this.renderCurrentAnnotations();
-    this.renderAllAnnotations();
-    Utils.toast(`✓ Target #${currentObj} 已添加（${currentAnns.length} 点）`, 'success', 1500);
+    // ★ 忠实复现 app.py:add_target: 调后端 /api/target/add 推进事务边界
+    //   后端会: 1) 校验有标注 2) clip.status FINE_CUT→ANNOTATED 3) 返回 next obj_id
+    //   前端拿到 next obj_id 后 _nextObjId = next, 开始为下一个 target 累积
+    API.addTarget({ clip_id: this._clip.id })
+      .then(r => {
+        this._nextObjId = r.obj_id;          // 后端权威分配 (替代客户端自增)
+        this.renderCurrentAnnotations();
+        this.renderAllAnnotations();
+        Utils.toast(`✓ Target #${currentObj} 已提交（${currentAnns.length} 点），下一个: #${r.obj_id}`, 'success', 1500);
+      })
+      .catch(err => {
+        Utils.toast(`提交 Target 失败: ${err.message}`, 'error');
+      });
   },
 
   async confirmAndEnqueue() {
@@ -551,8 +574,10 @@ const Target = {
       return;
     }
     try {
+      // 读后端已确认的 target 列表 (clip.status 已在 add_target 里推到 ANNOTATED)
       const r = await Utils.safe(() => API.listTargets(this._clip.id), '读取标注失败');
-      Utils.toast(`✓ ${r.targets.length} 个 target 已入队 → 4D 处理`, 'success');
+      const clipInfo = await Utils.safe(() => API.getClip(this._clip.id), '读取 clip 失败');
+      Utils.toast(`✓ 共 ${r.targets.length} 个 target，clip 状态: ${clipInfo.status} → 4D Studio`, 'success');
       setTimeout(() => App.switchModule('4d'), 800);
     } catch (e) {
       console.warn(e);
