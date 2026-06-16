@@ -402,21 +402,6 @@ const Target = {
       await Utils.safe(() => API.annotateClip(this._clip.id, {
         annotations: this._annotations,
       }), '保存标注失败');
-      // ★ 忠实复现: 调 clickTarget, 把当前 frame 当前 obj 的所有点 + 帧宽高送过去
-      //  (后端会做归一化, 跟 app.py:421-422 一致)
-      const currentFramePts = this._annotations
-        .filter(a => a.frame_idx === frame_idx && a.obj_id === obj_id)
-        .map(a => ({ x: a.x, y: a.y, point_type: a.point_type }));
-      API.clickTarget({
-        clip_id: this._clip.id,
-        obj_id,
-        frame_idx,
-        x, y, point_type: pt,           // 旧式字段 (向后兼容)
-        points: currentFramePts,         // 新式字段 (推荐: 累积多点击)
-        frame_width: iw,
-        frame_height: ih,
-        frame_base64: this._frames[frame_idx],
-      }).catch(err => console.warn('clickTarget preview failed:', err));
       Utils.toast(`✓ 已标注 obj #${obj_id} (${pt}) at (${x}, ${y})`, 'success', 1200);
     } catch (err) {
       // 回滚
@@ -425,6 +410,38 @@ const Target = {
       this.renderCurrentAnnotations();
       this.renderClipSummary();
       console.warn('annotate failed:', err);
+      return;  // 标注失败, 不再走 mask 预览
+    }
+
+    // ★ 忠实复现: 调 clickTarget, 把当前 frame 当前 obj 的所有点 + 帧宽高送过去
+    //  (后端会做归一化, 跟 app.py:421-422 一致)
+    // 注: clickTarget 是 best-effort 预览, 失败不影响标注 (已在上面持久化)
+    const currentFramePts = this._annotations
+      .filter(a => a.frame_idx === frame_idx && a.obj_id === obj_id)
+      .map(a => ({ x: a.x, y: a.y, point_type: a.point_type }));
+    try {
+      const preview = await API.clickTarget({
+        clip_id: this._clip.id,
+        obj_id,
+        frame_idx,
+        x, y, point_type: pt,           // 旧式字段 (向后兼容)
+        points: currentFramePts,         // 新式字段 (推荐: 累积多点击)
+        frame_width: iw,
+        frame_height: ih,
+        frame_base64: this._frames[frame_idx],
+      });
+      if (preview && preview.painted_image_base64) {
+        const imgEl = document.getElementById('target-image');
+        if (imgEl) {
+          // 后端把原图 + 半透明彩色 mask + 当前点 marker 合成好, 直接覆盖到主 img 上
+          // DOM marker 位置基于 getBoundingClientRect (相对 img), painted 与原图同尺寸,
+          // 所以 markers 位置不变, 不需要重画
+          imgEl.src = 'data:image/jpeg;base64,' + preview.painted_image_base64;
+        }
+      }
+    } catch (err) {
+      // best-effort: SAM-3 失败不影响标注 (DOM marker 还在, 标注已持久化)
+      console.warn('clickTarget preview failed:', err);
     }
   },
 
