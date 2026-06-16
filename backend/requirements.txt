@@ -1,0 +1,31 @@
+# FastAPI 后端核心
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-multipart>=0.0.9
+
+# 数据存储
+# 注释：默认使用 SQLite (内置) 而非 Postgres，便于本地零依赖启动
+# psycopg2-binary>=2.9.9    # 可选：生产环境 Postgres
+
+# 向量库 (可选 - stub 模式不需要)
+# weaviate-client>=4.5.0    # 可选：生产环境切换
+
+# ML 框架 (降级模式下也保留接口)
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+omegaconf>=2.3.0
+tqdm>=4.65.0
+
+# 文本向量降级方案 (sentence-transformers)
+# 模型会在首次运行时自动下载
+sentence-transformers>=2.2.0
+
+# 重模型 SDK（可选 - 仅在 checkpoint 存在时启用）
+# diffusers>=0.27.0
+# transformers>=4.38.0
+# accelerate>=0.27.0

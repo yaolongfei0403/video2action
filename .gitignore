@@ -1,0 +1,78 @@
+# ====== Python / venv ======
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ====== 编辑器 / OS ======
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ====== Claude / 工具本地配置 ======
+.claude/
+.mcp.json
+.aider*
+
+# ====== 运行时数据与产物（PRD 中由对象存储替代） ======
+outputs/
+data/system.db
+data/system.db-*
+data/embeddings/
+*.db
+*.sqlite3
+*.sqlite
+*.pkl
+*.npz
+
+# ====== 凭据 / 环境变量 ======
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ====== 日志 ======
+*.log
+logs/
+
+# ====== 模型权重（外部按需下载） ======
+models/
+checkpoints/
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+# ====== 大文件 / 中间产物 ======
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.tmp
+*.bak
+*.orig
+
+# ====== Node (若以后加前端构建) ======
+node_modules/
+dist/
+build/

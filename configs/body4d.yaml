@@ -1,0 +1,72 @@
+# SAM-Body4D System Configuration
+# 用于 FastAPI 后端服务（替代 app.py 中的硬编码路径）
+
+runtime:
+  output_dir: "./outputs"
+  data_dir: "./data"
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "INFO"
+
+sam3:
+  # SAM-3 模型权重路径；若不存在则降级到 stub 模式
+  ckpt_path: "./models/sam3/checkpoint.pt"
+  device: "cuda"
+  # 降级策略
+  fallback_enabled: true
+
+sam_3d_body:
+  ckpt_path: "./models/sam_3d_body/checkpoint.pt"
+  mhr_path: "./models/sam_3d_body/mhr_model.pt"
+  fov_path: "./models/sam_3d_body/moge2.pt"
+  device: "cuda"
+  batch_size: 8
+  fallback_enabled: true
+
+completion:
+  # Diffusion-VAS (Visual Amodal Segmentation)
+  enable: false  # 主开关：是否启用扩散补全
+  model_path_mask: "./models/diffusion_vas/mask_pipeline"
+  model_path_rgb: "./models/diffusion_vas/rgb_pipeline"
+  model_path_depth: "./models/diffusion_vas/depth_encoder"
+  depth_encoder: "vitl"
+  max_occ_len: 30
+  detection_resolution: [256, 512]
+  completion_resolution: [512, 1024]
+  fallback_enabled: true
+
+vlm:
+  # Qwen-VL 描述生成
+  model_path: "./models/qwen_vl/qwen2.5-vl-7b-instruct"
+  device: "cuda"
+  # 降级：用关键词 + 启发式规则生成结构化 JSON
+  fallback_enabled: true
+  template_path: "./configs/vlm_prompts.json"
+
+embedding:
+  # Qwen3-Embedding 文本向量化
+  model_path: "./models/qwen3_embedding"
+  device: "cpu"
+  # 降级：sentence-transformers 多语种 MiniLM
+  fallback_model: "paraphrase-multilingual-MiniLM-L12-v2"
+  dim: 384
+  fallback_enabled: true
+
+vector_db:
+  backend: "stub"  # stub | weaviate
+  weaviate_url: "http://localhost:8080"
+  weaviate_api_key: null
+  class_name: "ActionClip"
+  # 切换逻辑：env VECTOR_BACKEND 优先
+
+storage:
+  # 对象存储（MinIO/OSS 替代）
+  backend: "local"  # local | minio | oss
+  local_dir: "./outputs"
+  # MinIO 配置（可选）
+  minio_endpoint: null
+  minio_bucket: "video2action"
+
+api:
+  cors_origins: ["*"]
+  max_upload_size_mb: 10240  # 10GB
