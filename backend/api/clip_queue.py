@@ -164,34 +164,36 @@ class AnnotateRequest(BaseModel):
 
 @router.post("/{clip_id}/annotate")
 def annotate_clip(clip_id: str, req: AnnotateRequest) -> dict:
-    """Target Studio 提交标注 → clip 状态推进到 annotated (待 4D)。
+    """Target Studio 提交标注 → 替换 clip.annotations。
 
-    完成后该 clip 自动出现在 4D 处理队列中。
+    前端发来的是全量列表 (Source of Truth 在前端, 与 app.py 的 RUNTIME['clicks']
+    由前端 Gradio state 管理一致), 所以这里是**替换**而不是**追加**。
+
+    状态推进由 /api/target/add 负责 (FINE_CUT → ANNOTATED), 本端点不动 status。
     """
     store = get_store()
     clip = store.get_clip(clip_id)
     if clip is None:
         raise HTTPException(404, "Clip not found")
 
-    # 追加新标注 (不清空旧的)
-    existing = list(clip.annotations)
-    for a in req.annotations:
-        existing.append(MaskAnnotation(
+    # 替换为前端发来的全量列表 (Source of Truth = 前端 _annotations)
+    clip.annotations = [
+        MaskAnnotation(
             obj_id=a.obj_id,
             frame_idx=a.frame_idx,
             point_type=a.point_type,
             x=a.x,
             y=a.y,
-        ))
-    clip.annotations = existing
-    clip.status = ClipStatus.ANNOTATED
+        )
+        for a in req.annotations
+    ]
     store.upsert_clip(clip)
 
     return {
         "ok": True,
         "clip_id": clip.id,
         "status": clip.status.value,
-        "annotation_count": len(existing),
+        "annotation_count": len(clip.annotations),
     }
 
 
