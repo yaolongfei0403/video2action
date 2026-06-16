@@ -24,7 +24,7 @@ from ..store import (
     TaskType,
     get_store,
 )
-from ..utils import draw_point_marker, mask_painter
+from ..utils import draw_point_marker, mask_painter  # noqa: F401  (draw_point_marker is reserved for future per-frame export)
 from backend.pipeline_registry import get_pipeline
 
 logger = logging.getLogger(__name__)
@@ -141,6 +141,8 @@ def on_click(req: TargetClickRequest) -> dict:
         cv2.circle(mask_np, (req.x, req.y), 30, 255, -1)
 
     # 5) 叠加当前帧其他 obj 的 mask (RUNTIME['masks'] 等价: app.py:438-443)
+    # 注: 不在 painted 里画 +/- marker —— 前端 DOM 层是 marker 的 source of truth
+    # (含 #obj_id 标签, 后端只画会有重复)
     painted_image = None
     if req.frame_base64:
         try:
@@ -155,10 +157,9 @@ def on_click(req: TargetClickRequest) -> dict:
                     other_mask = np.zeros((H, W), dtype=np.uint8)
                     cv2.circle(other_mask, (a.x, a.y), 30, 255, -1)
                     painted_arr = mask_painter(painted_arr, other_mask, mask_color=4 + a.obj_id)
-            # 画最后一个 marker
-            painted_pil = draw_point_marker(Image.fromarray(painted_arr), req.x, req.point_type)
+            # 直接 JPEG 编码, 不画 marker (DOM 层负责)
             buf = io.BytesIO()
-            painted_pil.save(buf, format="JPEG", quality=85)
+            Image.fromarray(painted_arr).save(buf, format="JPEG", quality=85)
             painted_image = base64.b64encode(buf.getvalue()).decode("utf-8")
         except Exception as e:
             logger.warning(f"paint failed: {e}")
@@ -193,9 +194,9 @@ def _stub_click_from_b64(clip, req, pts, W, H) -> dict:
     for nx, ny in neg_seeds:
         cv2.circle(mask, (nx, ny), 30, 0, -1)
     painted = mask_painter(arr, mask, mask_color=4 + req.obj_id)
-    painted_pil = draw_point_marker(Image.fromarray(painted), req.x, req.point_type)
+    # 同 on_click: 不画 marker, DOM 层是 source of truth
     buf = io.BytesIO()
-    painted_pil.save(buf, format="JPEG", quality=85)
+    Image.fromarray(painted).save(buf, format="JPEG", quality=85)
     painted_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
     return {
         "obj_id": req.obj_id,
